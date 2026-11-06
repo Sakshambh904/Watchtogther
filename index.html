@@ -1,0 +1,96 @@
+<!doctype html><html lang="hi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Watch Party 🎬</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:#0f1117;color:#eee}
+button,input{font:inherit;padding:10px 14px;border-radius:8px;border:1px solid #333;background:#1b1e29;color:#eee}
+button{background:#e50914;border:0;cursor:pointer}button.alt{background:#2a2f40}
+#home{max-width:380px;margin:12vh auto;padding:20px;display:grid;gap:10px}
+#room{display:none;height:100vh;grid-template-columns:1fr 320px}
+#left{display:flex;flex-direction:column;padding:10px;gap:8px;min-width:0}
+#stage{position:relative;flex:1;background:#000;border-radius:10px;overflow:hidden;min-height:200px}
+#stage iframe,#yt{position:absolute;inset:0;width:100%;height:100%}
+#block{position:absolute;inset:0;display:none}
+#bar{display:flex;gap:6px;flex-wrap:wrap;align-items:center}#bar input{flex:1;min-width:140px}
+#side{display:flex;flex-direction:column;border-left:1px solid #222;padding:10px;min-height:0}
+#msgs{flex:1;overflow:auto;display:flex;flex-direction:column;gap:6px;font-size:14px}
+#msgs b{color:#ff6b6b}#cf{display:flex;gap:6px;margin-top:8px}#cf input{flex:1;min-width:0}
+.tag{font-size:13px;opacity:.8}
+@media(max-width:800px){#room{grid-template-columns:1fr;grid-template-rows:55vh 1fr;height:100vh}#side{border-left:0;border-top:1px solid #222}}
+</style></head><body>
+<div id="home"><h2>🎬 Watch Party</h2>
+<input id="name" placeholder="Tumhara naam">
+<button id="create">Naya room banao (main host)</button>
+<div style="text-align:center;opacity:.6">ya</div>
+<input id="code" placeholder="Dost ka room code" maxlength="6" style="text-transform:uppercase">
+<button class="alt" id="join">Room join karo</button>
+<label class="tag"><input type="checkbox" id="usemic" checked style="padding:0"> Mic se baat karni hai (voice)</label>
+<div id="err" style="color:#ff6b6b"></div></div>
+
+<div id="room"><div id="left">
+<div class="tag">Room code: <b id="rc" style="font-size:18px;letter-spacing:2px"></b> · <span id="role"></span></div>
+<div id="stage"><div id="yt"></div><div id="block"></div></div>
+<div id="bar"><input id="url" placeholder="YouTube link yahan daalo"><button id="load">Chalao</button><button class="alt" id="mute">🎤 Mic on</button></div>
+</div>
+<div id="side"><div id="msgs"></div><form id="cf"><input id="msg" placeholder="Message likho..." autocomplete="off"><button>➤</button></form></div></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const $=id=>document.getElementById(id), socket=io();
+let host=false,P=null,vid=null,ready=false,pending=null,stream=null,pcs={};
+
+function say(n,t){const d=document.createElement('div');d.innerHTML='<b></b> <span></span>';d.children[0].textContent=n;d.children[1].textContent=t;$('msgs').append(d);$('msgs').scrollTop=1e9}
+const vidId=u=>{const m=String(u).match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([\w-]{11})/);return m?m[1]:null};
+
+async function enter(r){
+  if(r.error){$('err').textContent=r.error;return}
+  host=r.host;$('home').style.display='none';$('room').style.display='grid';$('rc').textContent=r.code;
+  $('role').textContent=host?'👑 Tum host ho — sirf tum control kar sakte ho':'Tum guest ho — host control karega';
+  if(!host){$('url').style.display=$('load').style.display='none'}
+  if(r.state)pending=r.state;
+  const s=document.createElement('script');s.src='https://www.youtube.com/iframe_api';document.head.append(s);
+}
+async function start(fn){
+  $('err').textContent='';
+  if($('usemic').checked){try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){$('mute').style.display='none'}}else $('mute').style.display='none';
+  fn();
+}
+$('create').onclick=()=>start(()=>socket.emit('create',$('name').value,enter));
+$('join').onclick=()=>start(()=>socket.emit('join',$('code').value,$('name').value,enter));
+
+window.onYouTubeIframeAPIReady=()=>{
+  P=new YT.Player('yt',{playerVars:{controls:host?1:0,disablekb:1,rel:0,playsinline:1},events:{
+    onReady:()=>{ready=true;if(!host)$('block').style.display='block';if(pending)apply(pending)},
+    onStateChange:()=>{if(host)push()}}});
+};
+const snap=()=>({v:vid,t:P.getCurrentTime(),p:P.getPlayerState()===1});
+function push(){if(host&&ready&&vid)socket.emit('sync',snap())}
+setInterval(push,2000);
+
+$('load').onclick=()=>{const v=vidId($('url').value);if(!v)return say('•','Sahi YouTube link daalo');vid=v;P.loadVideoById(v);setTimeout(push,800)};
+function apply(st){
+  if(!ready){pending=st;return}
+  if(st.v!==vid){vid=st.v;P.loadVideoById({videoId:st.v,startSeconds:st.t});}
+  if(Math.abs(P.getCurrentTime()-st.t)>2)P.seekTo(st.t,true);
+  const ps=P.getPlayerState();
+  if(st.p&&ps!==1)P.playVideo();else if(!st.p&&ps===1)P.pauseVideo();
+}
+socket.on('sync',st=>{if(!host)apply(st)});
+socket.on('ended',()=>{say('•','Host chala gaya, room band.');ready&&P.pauseVideo()});
+
+$('cf').onsubmit=e=>{e.preventDefault();if($('msg').value.trim())socket.emit('chat',$('msg').value);$('msg').value=''};
+socket.on('chat',m=>say(m.name,m.text));
+
+// ---- voice (WebRTC) ----
+function mkpc(id){
+  const pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});pcs[id]=pc;
+  if(stream)stream.getTracks().forEach(t=>pc.addTrack(t,stream));else pc.addTransceiver('audio',{direction:'recvonly'});
+  pc.onicecandidate=e=>e.candidate&&socket.emit('signal',{to:id,data:{ice:e.candidate}});
+  pc.ontrack=e=>{let a=$('a'+id);if(!a){a=document.createElement('audio');a.id='a'+id;a.autoplay=true;document.body.append(a)}a.srcObject=e.streams[0]};
+  return pc}
+socket.on('peers',async ids=>{for(const id of ids){const pc=mkpc(id);await pc.setLocalDescription(await pc.createOffer());socket.emit('signal',{to:id,data:{sdp:pc.localDescription}})}});
+socket.on('signal',async({from,data})=>{const pc=pcs[from]||mkpc(from);
+  if(data.sdp){await pc.setRemoteDescription(data.sdp);if(data.sdp.type==='offer'){await pc.setLocalDescription(await pc.createAnswer());socket.emit('signal',{to:from,data:{sdp:pc.localDescription}})}}
+  else if(data.ice){try{await pc.addIceCandidate(data.ice)}catch(e){}}});
+socket.on('left',({id,name})=>{say('•',name+' chala gaya');pcs[id]&&pcs[id].close();delete pcs[id];$('a'+id)&&$('a'+id).remove()});
+$('mute').onclick=()=>{const t=stream.getAudioTracks()[0];t.enabled=!t.enabled;$('mute').textContent=t.enabled?'🎤 Mic on':'🔇 Mic off'};
+</script></body></html>
